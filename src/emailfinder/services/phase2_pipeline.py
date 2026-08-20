@@ -1,9 +1,10 @@
 import logging
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from emailfinder.domain.phase2 import QualificationOutput
+from emailfinder.domain.phase2 import PublicEvidence, QualificationOutput, SourceQuality
 from emailfinder.persistence.database import Company, Evidence, Job, Prospect, now, normalize_domain
 from emailfinder.providers.evidence import identity_confirmed
 from emailfinder.services.qualification import hard_rejection, inspectable_score
@@ -37,6 +38,11 @@ class Phase2APipeline:
                     session.add(company); session.flush()
                 try:
                     public_evidence = self.evidence_provider.collect(candidate)
+                    # Wikidata discovery fields are structured CC0 claims with a
+                    # traceable entity URL. Retain them for gates and reasoning;
+                    # do not promote ordinary search snippets to evidence.
+                    if urlparse(str(candidate.discovery_url)).netloc.endswith("wikidata.org") and len(candidate.discovery_excerpt) >= 20:
+                        public_evidence.insert(0, PublicEvidence(id="wikidata-1", evidence_type="public_business_directory", source_url=candidate.discovery_url, source_title=candidate.discovery_title, excerpt=candidate.discovery_excerpt, source_quality=SourceQuality.REPUTABLE_SECONDARY))
                     for item in public_evidence:
                         session.add(Evidence(entity_type="company", entity_id=company.id, evidence_type=item.evidence_type, source_url=str(item.source_url), source_title=item.source_title, excerpt=item.excerpt, source_quality=item.source_quality))
                     job.evidence_count += len(public_evidence)

@@ -49,3 +49,18 @@ def test_phase2_orchestration_dedupes_and_caches(engine, brief):
         assert session.scalar(select(func.count(Company.id))) == 1
         assert session.scalar(select(func.count(Prospect.id))) == 1
         assert session.scalar(select(func.count(Evidence.id))) == 1
+
+
+def test_wikidata_employee_count_can_reject_before_reasoning(engine, brief):
+    candidate = C.model_copy(update={"discovery_url": "https://www.wikidata.org/entity/Q1", "discovery_excerpt": "engineering; United States; 5 employees"})
+    class OneDiscovery:
+        def discover(self, brief): return [candidate]
+    class NoSizeEvidence:
+        def collect(self, company):
+            return [E.model_copy(update={"excerpt": "Acme Engineering is a United States industrial engineering company with procurement operations."})]
+    reasoning = Reasoning()
+    job = Phase2APipeline(engine, OneDiscovery(), NoSizeEvidence(), reasoning).run(brief)
+    assert job.rejected_count == 1, (job.insufficient_count, job.error_count, job.processed_count)
+    assert reasoning.calls == 0
+    with Session(engine) as session:
+        assert session.scalar(select(func.count(Evidence.id))) == 2
