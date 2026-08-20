@@ -44,11 +44,16 @@ class MainWindow(QMainWindow):
         try:
             brief = load_company_brief(self.brief_path)
             if self.mode == "REAL":
-                from emailfinder.providers.brave import BraveCompanyDiscoveryProvider
                 from emailfinder.providers.evidence import PublicWebsiteEvidenceProvider
                 from emailfinder.providers.nvidia import NVIDIAReasoningProvider
                 from emailfinder.services.phase2_pipeline import Phase2APipeline
-                job = Phase2APipeline(self.engine, BraveCompanyDiscoveryProvider(), PublicWebsiteEvidenceProvider(), NVIDIAReasoningProvider()).run(brief)
+                if os.getenv("SEARCH_PROVIDER", "BRAVE").upper() == "WIKIDATA":
+                    from emailfinder.providers.wikidata import WikidataCompanyDiscoveryProvider
+                    discovery = WikidataCompanyDiscoveryProvider()
+                else:
+                    from emailfinder.providers.brave import BraveCompanyDiscoveryProvider
+                    discovery = BraveCompanyDiscoveryProvider()
+                job = Phase2APipeline(self.engine, discovery, PublicWebsiteEvidenceProvider(), NVIDIAReasoningProvider()).run(brief)
                 message = f"REAL Phase 2A complete. Discovered {job.discovered_count}; evidence {job.evidence_count}; evaluated {job.evaluated_count}; accepted {job.accepted_count}; rejected {job.rejected_count}; insufficient {job.insufficient_count}; errors {job.error_count}."
             else:
                 pipeline = MockPipeline(self.engine, MockCompanyDiscoveryProvider(), MockReasoningProvider(), MockEmailDiscoveryProvider(), MockEmailVerificationProvider())

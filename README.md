@@ -31,6 +31,8 @@ Phase 2A uses exactly one discovery service: the official Brave Search API. It p
 
 Create a Brave Search API account and subscription token through the official **Brave Search API Dashboard**. Current signup may require selecting a plan/payment method even when monthly credits cover the validation run. Put the token only in local `.env` as `SEARCH_API_KEY`.
 
+For a strictly $0 smoke test, `SEARCH_PROVIDER=WIKIDATA` selects Wikidata's public CC0 query service instead. It requires no account or key, returns structured entity and official-website URLs, and is deliberately limited by `DISCOVERY_LIMIT`. Its coverage and freshness are weaker than a commercial search index.
+
 ## Setup and run
 
 Prerequisite: Python 3.11 or newer.

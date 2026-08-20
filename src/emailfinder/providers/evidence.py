@@ -25,8 +25,13 @@ def normalize_evidence_text(text: str, limit: int = 3500) -> str:
 
 
 class _TextParser(HTMLParser):
-    def __init__(self): super().__init__(); self.parts = []; self.title = ""
+    def __init__(self): super().__init__(); self.parts = []; self.title = ""; self.ignored_depth = 0
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "noscript", "svg"}: self.ignored_depth += 1
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "noscript", "svg"} and self.ignored_depth: self.ignored_depth -= 1
     def handle_data(self, data):
+        if self.ignored_depth: return
         clean = normalize_evidence_text(data)
         if clean: self.parts.append(clean)
 
@@ -59,4 +64,3 @@ def identity_confirmed(company: DiscoveredCompany, evidence: list[PublicEvidence
     tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9]+", company.name) if len(t) >= 3]
     primary = " ".join(e.excerpt.lower() for e in evidence if e.source_quality == SourceQuality.PRIMARY)
     return bool(primary and tokens and any(token in primary for token in tokens))
-

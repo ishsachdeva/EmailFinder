@@ -32,7 +32,9 @@ class NVIDIAReasoningProvider:
         self.api_key = api_key or os.getenv("NVIDIA_API_KEY", "")
         self.base_url = (base_url or os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")).rstrip("/")
         self.model = model or os.getenv("NVIDIA_MODEL", "")
-        self.client = client or httpx.Client(timeout=45)
+        # Large reasoning models on NVIDIA commonly exceed 45 seconds; keep the
+        # request bounded while matching the known-working local configuration.
+        self.client = client or httpx.Client(timeout=240)
         self.limiter = limiter or SlidingWindowRateLimiter(36)
         self.max_attempts, self.sleeper = max_attempts, sleeper
 
@@ -77,4 +79,3 @@ class NVIDIAReasoningProvider:
                     raise EmailFinderError(ErrorCategory.INVALID_RESULT, f"NVIDIA returned invalid structured output: {exc}") from exc
             self.sleeper(2 ** attempt)
         raise EmailFinderError(ErrorCategory.PROVIDER_ERROR, f"NVIDIA qualification failed: {last_error}")
-

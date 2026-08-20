@@ -64,7 +64,7 @@ class Phase2APipeline:
                 except Exception as exc:
                     job.error_count += 1
                     company.status = "ERROR"
-                    log.warning("company_processing_failed domain=%s error_type=%s", domain, type(exc).__name__)
+                    log.warning("company_processing_failed domain=%s error_type=%s category=%s", domain, type(exc).__name__, getattr(exc, "category", "UNCLASSIFIED"))
                 job.processed_count += 1
                 session.commit()
             job.status, job.completed_at = "COMPLETED", now(); session.commit()

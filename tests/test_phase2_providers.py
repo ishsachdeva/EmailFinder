@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from emailfinder.domain.errors import EmailFinderError, ErrorCategory
 from emailfinder.domain.phase2 import DiscoveredCompany, PublicEvidence, QualificationOutput, SourceQuality
 from emailfinder.providers.brave import BraveCompanyDiscoveryProvider
-from emailfinder.providers.evidence import classify_source, normalize_evidence_text
+from emailfinder.providers.evidence import PublicWebsiteEvidenceProvider, classify_source, normalize_evidence_text
 from emailfinder.providers.nvidia import NVIDIAReasoningProvider, SlidingWindowRateLimiter
 
 
@@ -38,6 +38,13 @@ def test_evidence_normalization_and_source_quality():
     assert classify_source("https://unknown.example/acme", "acme.test") == SourceQuality.WEAK_SECONDARY
 
 
+def test_evidence_extractor_ignores_script_and_style_content():
+    html = "<html><style>secret-css</style><script>trackingCode()</script><body>Acme Engineering provides useful industrial services across the United States for operational teams.</body></html>"
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html, headers={"content-type": "text/html"}, request=request)))
+    collected = PublicWebsiteEvidenceProvider(client=client).collect(company())
+    assert collected and "trackingCode" not in collected[0].excerpt and "secret-css" not in collected[0].excerpt
+
+
 def test_nvidia_output_contract_rejects_bad_data():
     with pytest.raises(ValidationError): QualificationOutput.model_validate(output(icp_score=101))
     with pytest.raises(ValidationError): QualificationOutput.model_validate(output(need_hypothesis="", evidence_ids_used=[]))
@@ -47,6 +54,12 @@ def test_nvidia_parses_valid_structured_response(brief):
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(output())}}]})))
     provider = NVIDIAReasoningProvider(api_key="test", model="test-model", client=client, limiter=SlidingWindowRateLimiter(36), sleeper=lambda _: None)
     assert provider.qualify_company(company(), evidence(), brief).qualification == "ACCEPT"
+
+
+def test_nvidia_default_timeout_allows_slow_reasoning_model():
+    provider = NVIDIAReasoningProvider(api_key="test", model="test-model")
+    assert provider.client.timeout.read == 240
+    provider.client.close()
 
 
 def test_nvidia_invalid_output_has_bounded_retries(brief):
@@ -66,4 +79,3 @@ def test_rate_limiter_waits_at_boundary():
     limiter = SlidingWindowRateLimiter(1, clock=clock, sleeper=sleep)
     limiter.acquire(); limiter.acquire()
     assert waits == [60.0]
-
