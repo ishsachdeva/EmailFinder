@@ -4,10 +4,10 @@ from sqlalchemy.orm import Session
 from emailfinder.domain.phase2 import DiscoveredCompany, PublicEvidence, QualificationOutput, SourceQuality
 from emailfinder.persistence.database import Company, Evidence, Prospect
 from emailfinder.services.phase2_pipeline import Phase2APipeline
-from emailfinder.services.qualification import hard_rejection, inspectable_score
+from emailfinder.services.qualification import final_icp_score, hard_rejection
 
 
-C = DiscoveredCompany(name="Acme Engineering", domain="acme.test", website="https://acme.test", discovery_url="https://acme.test", discovery_title="Acme Engineering", discovery_excerpt="Official site")
+C = DiscoveredCompany(name="Acme Engineering", domain="acme.test", website="https://acme.test", discovery_url="https://acme.test", discovery_title="Acme Engineering", discovery_excerpt="Official site", entity_resolution_status="CONFIRMED")
 E = PublicEvidence(id="web-1", evidence_type="company_website", source_url="https://acme.test", source_title="Acme", excerpt="Acme Engineering is a United States industrial engineering company with 100 employees and procurement operations.", source_quality=SourceQuality.PRIMARY)
 
 
@@ -19,7 +19,7 @@ class Reasoning:
     calls = 0
     def qualify_company(self, company, evidence, brief, resolved_facts=None):
         self.calls += 1
-        return QualificationOutput(company_name="Acme Engineering", domain="acme.test", industry_assessment="Engineering", geography_assessment="United States", size_assessment="100", positive_signals=["procurement operations"], negative_signals=[], industry_fit=100, company_size_fit=100, geography_fit=100, workflow_signals=80, exclusion_risk=0, icp_score=90, qualification="ACCEPT", reason="Primary evidence supports the fit", need_hypothesis="Documented procurement operations suggest approval coordination may be relevant.", evidence_ids_used=["web-1"], confidence=90)
+        return QualificationOutput(qualification="ACCEPT", model_score=90, confidence=90, positive_signals=[{"signal": "procurement operations", "evidence_ids": ["web-1"]}], negative_signals=[], reason="Primary evidence supports the fit", need_hypothesis="Documented procurement operations suggest approval coordination may be relevant.", need_hypothesis_evidence_ids=["web-1"])
 
 
 def test_hard_rejection_before_reasoning(brief):
@@ -33,9 +33,9 @@ def test_explicit_company_size_hard_rejection(brief):
     assert "below configured minimum" in hard_rejection(C, [too_small], brief)
 
 
-def test_inspectable_weighted_score(brief):
-    result = Reasoning().qualify_company(C, [E], brief)
-    assert inspectable_score(result, brief) == 94
+def test_documented_final_score_contract():
+    assert final_icp_score(55, 100) == 100
+    assert final_icp_score(0, 100) == 30
 
 
 def test_phase2_orchestration_dedupes_and_caches(engine, brief):
@@ -64,3 +64,12 @@ def test_wikidata_employee_count_can_reject_before_reasoning(engine, brief):
     assert reasoning.calls == 0
     with Session(engine) as session:
         assert session.scalar(select(func.count(Evidence.id))) == 2
+
+
+def test_only_confirmed_entities_reach_qualification(engine, brief):
+    unresolved = C.model_copy(update={"entity_resolution_status": "PROBABLE"})
+    class UnsafeDiscovery:
+        def discover(self, brief): return [unresolved]
+    reasoning = Reasoning()
+    job = Phase2APipeline(engine, UnsafeDiscovery(), EvidenceProvider(), reasoning).run(brief)
+    assert job.discovered_count == 0 and reasoning.calls == 0

@@ -22,12 +22,13 @@ def hard_rejection(company: DiscoveredCompany, evidence: list[PublicEvidence], b
 
 
 def inspectable_score(output: QualificationOutput, brief) -> int:
-    weights = brief.qualification.scoring_weights
-    values = {
-        "industry_fit": output.industry_fit,
-        "company_size_fit": output.company_size_fit,
-        "geography_fit": output.geography_fit,
-        "workflow_signals": output.workflow_signals,
-        "exclusion_risk": 100 - output.exclusion_risk,
-    }
-    return round(sum(values[name] * weight / 100 for name, weight in weights.model_dump().items()))
+    raise TypeError("use final_icp_score(deterministic_score, model_score)")
+
+
+def final_icp_score(deterministic: int, model: int) -> int:
+    """Combine factual fit (70%) and evidence-constrained soft fit (30%).
+
+    The deterministic score has a documented maximum of 55. NVIDIA returns
+    only ``model_score``; it can never supply or override the final score.
+    """
+    return round((deterministic / 55 * 100) * 0.70 + model * 0.30)

@@ -8,7 +8,7 @@ from emailfinder.domain.errors import EmailFinderError, ErrorCategory
 from emailfinder.domain.phase2 import DiscoveredCompany, PublicEvidence, QualificationOutput, SourceQuality
 from emailfinder.providers.brave import BraveCompanyDiscoveryProvider
 from emailfinder.providers.evidence import PublicWebsiteEvidenceProvider, classify_source, normalize_evidence_text
-from emailfinder.providers.nvidia import NVIDIAReasoningProvider, SlidingWindowRateLimiter
+from emailfinder.providers.nvidia import NVIDIAReasoningProvider, SlidingWindowRateLimiter, ValidationFailureCategory, schema_issue
 
 
 def company():
@@ -20,7 +20,7 @@ def evidence():
 
 
 def output(**updates):
-    data = dict(company_name="Acme Engineering", domain="acme.test", industry_assessment="Engineering", geography_assessment="United States", size_assessment="50-200", positive_signals=["operations teams"], negative_signals=[], industry_fit=90, company_size_fit=80, geography_fit=100, workflow_signals=75, exclusion_risk=0, icp_score=84, qualification="ACCEPT", reason="Evidence supports fit", need_hypothesis="Growing operations may make approval coordination relevant.", evidence_ids_used=["web-1"], confidence=85)
+    data = dict(qualification="ACCEPT", model_score=84, confidence=85, positive_signals=[{"signal": "operations teams", "evidence_ids": ["web-1"]}], negative_signals=[], reason="Evidence supports fit", need_hypothesis="Growing operations may make approval coordination relevant.", need_hypothesis_evidence_ids=["web-1"])
     data.update(updates); return data
 
 
@@ -46,9 +46,10 @@ def test_evidence_extractor_ignores_script_and_style_content():
 
 
 def test_nvidia_output_contract_rejects_bad_data():
-    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(icp_score=101))
-    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(need_hypothesis="", evidence_ids_used=[]))
-    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(qualification="REJECT", need_hypothesis="", evidence_ids_used=[]))
+    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(model_score=101))
+    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(need_hypothesis=None, need_hypothesis_evidence_ids=[]))
+    rejected = output(qualification="REJECT", need_hypothesis=None, need_hypothesis_evidence_ids=[])
+    assert QualificationOutput.model_validate(rejected).need_hypothesis is None
     with pytest.raises(ValidationError): QualificationOutput.model_validate(output(qualification="INSUFFICIENT_EVIDENCE", need_hypothesis="Likely complex approvals"))
 
 
@@ -78,13 +79,55 @@ def test_nvidia_default_timeout_allows_slow_reasoning_model():
 
 
 def test_nvidia_invalid_output_has_bounded_retries(brief):
-    calls = 0
+    calls = 0; prompts = []
     def handler(request):
-        nonlocal calls; calls += 1
+        nonlocal calls; calls += 1; prompts.append(json.loads(json.loads(request.content)["messages"][1]["content"]))
         return httpx.Response(200, json={"choices": [{"message": {"content": "not json"}}]})
     provider = NVIDIAReasoningProvider(api_key="test", model="test", client=httpx.Client(transport=httpx.MockTransport(handler)), max_attempts=2, sleeper=lambda _: None)
     with pytest.raises(EmailFinderError) as caught: provider.qualify_company(company(), evidence(), brief)
     assert calls == 2 and caught.value.category == ErrorCategory.INVALID_RESULT
+    assert "repair" not in prompts[0] and "INVALID_JSON" in prompts[1]["repair"]
+    assert provider.call_metrics[0]["failure_category"] == ValidationFailureCategory.INVALID_JSON
+
+
+@pytest.mark.parametrize(("updates", "category"), [
+    ({"model_score": 101}, ValidationFailureCategory.SCORE_OUT_OF_RANGE),
+    ({"model_score": "high"}, ValidationFailureCategory.WRONG_FIELD_TYPE),
+    ({"qualification": "MAYBE"}, ValidationFailureCategory.INVALID_ENUM),
+    ({"unexpected": True}, ValidationFailureCategory.EXTRA_FIELD_NOT_ALLOWED),
+])
+def test_nvidia_schema_failure_categories(updates, category):
+    data = output(); data.update(updates)
+    with pytest.raises(ValidationError) as caught: QualificationOutput.model_validate(data)
+    assert schema_issue(caught.value).category == category
+
+
+def test_nvidia_missing_field_and_need_rule_categories():
+    missing = output(); missing.pop("model_score")
+    with pytest.raises(ValidationError) as caught: QualificationOutput.model_validate(missing)
+    assert schema_issue(caught.value).category == ValidationFailureCategory.MISSING_REQUIRED_FIELD
+    missing_evidence = output(positive_signals=[{"signal": "claim", "evidence_ids": []}])
+    with pytest.raises(ValidationError) as caught: QualificationOutput.model_validate(missing_evidence)
+    assert schema_issue(caught.value).category == ValidationFailureCategory.MISSING_REQUIRED_EVIDENCE
+    bad_need = output(qualification="REJECT", need_hypothesis="speculation", need_hypothesis_evidence_ids=["web-1"])
+    with pytest.raises(ValidationError) as caught: QualificationOutput.model_validate(bad_need)
+    assert schema_issue(caught.value).category == ValidationFailureCategory.UNSUPPORTED_NEED_HYPOTHESIS
+
+
+def test_nvidia_evidence_validation_categories(brief):
+    responses = [output(positive_signals=[{"signal": "claim", "evidence_ids": ["unknown"]}]), output(positive_signals=[{"signal": "claim", "evidence_ids": ["web-1", "web-1"]}])]
+    for expected, data in zip((ValidationFailureCategory.UNKNOWN_EVIDENCE_ID, ValidationFailureCategory.DUPLICATE_EVIDENCE_ID), responses):
+        client = httpx.Client(transport=httpx.MockTransport(lambda request, d=data: httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(d)}}]})))
+        provider = NVIDIAReasoningProvider(api_key="test", model="test", client=client, max_attempts=1)
+        with pytest.raises(EmailFinderError): provider.qualify_company(company(), evidence(), brief)
+        assert provider.call_metrics[0]["failure_category"] == expected
+
+
+def test_nvidia_empty_response_category(brief):
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})))
+    provider = NVIDIAReasoningProvider(api_key="test", model="test", client=client, max_attempts=1)
+    with pytest.raises(EmailFinderError): provider.qualify_company(company(), evidence(), brief)
+    assert provider.call_metrics[0]["failure_category"] == ValidationFailureCategory.EMPTY_RESPONSE
 
 
 def test_rate_limiter_waits_at_boundary():

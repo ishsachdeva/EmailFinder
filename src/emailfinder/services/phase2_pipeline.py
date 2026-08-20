@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from emailfinder.domain.phase2 import PublicEvidence, QualificationOutput, SourceQuality
 from emailfinder.persistence.database import Company, Evidence, Job, Prospect, now, normalize_domain
 from emailfinder.providers.evidence import identity_confirmed
-from emailfinder.services.qualification import hard_rejection, inspectable_score
+from emailfinder.services.qualification import final_icp_score, hard_rejection
 from emailfinder.services.facts import deterministic_score, resolve_facts, resolved_hard_rejection
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,8 @@ class Phase2APipeline:
             job = Job(job_type="REAL_PHASE_2A", status="RUNNING")
             session.add(job); session.commit()
             try:
-                candidates = self.discovery.discover(brief)
+                discovered = self.discovery.discover(brief)
+                candidates = [candidate for candidate in discovered if candidate.entity_resolution_status == "CONFIRMED"]
             except Exception:
                 job.status, job.error_count, job.completed_at = "FAILED", 1, now(); session.commit(); raise
             job.discovered_count = len(candidates)
@@ -59,17 +60,14 @@ class Phase2APipeline:
                         rejection = "INSUFFICIENT_EVIDENCE: company identity not established on its public website"
                     if rejection:
                         qualification = "INSUFFICIENT_EVIDENCE" if rejection.startswith("INSUFFICIENT") else "REJECT"
-                        output = None; score = confidence = model_score = 0; det_score = deterministic_score(facts, brief); reason = rejection; need = ""
+                        output = None; score = confidence = model_score = 0; det_score = deterministic_score(facts, brief); reason = rejection; need = None
                     else:
                         output = self.reasoning.qualify_company(candidate, company_evidence, brief, facts)
-                        score = inspectable_score(output, brief)
-                        det_score, model_score = deterministic_score(facts, brief), output.icp_score
+                        det_score, model_score = deterministic_score(facts, brief), output.model_score
+                        score = final_icp_score(det_score, model_score)
                         qualification = output.qualification
                         if qualification == "ACCEPT" and score < brief.qualification.minimum_icp_score: qualification = "REJECT"
-                        reason, need, confidence = f"Final ICP score {score}/100 (model score {model_score}/100; deterministic factual score {det_score}/55). {output.reason}", output.need_hypothesis if qualification == "ACCEPT" else "", output.confidence
-                        company.industry = output.industry_assessment[:150]
-                        company.country = output.geography_assessment[:100]
-                        company.employee_range = output.size_assessment[:50]
+                        reason, need, confidence = f"Final ICP score {score}/100 (model score {model_score}/100; deterministic factual score {det_score}/55). {output.reason}", output.need_hypothesis if qualification == "ACCEPT" else None, output.confidence
                         job.evaluated_count += 1
                     company.status = qualification
                     session.add(Prospect(company_id=company.id, person_id=None, email_id=None, icp_score=score, deterministic_score=det_score, model_score=model_score, final_icp_score=score, buyer_score=0, confidence_score=confidence, confidence_band=qualification, need_hypothesis=need, personalization_angle=None, rejection_reason=reason if qualification != "ACCEPT" else None, status=qualification))

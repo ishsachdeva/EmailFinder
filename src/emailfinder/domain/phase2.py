@@ -37,6 +37,7 @@ class DiscoveredCompany(BaseModel):
     resolution_source: str | None = None
     resolution_confidence: int = Field(default=0, ge=0, le=100)
     domain_validation_status: str = "UNVALIDATED"
+    entity_resolution_status: Literal["CONFIRMED", "PROBABLE", "UNRESOLVED", "REJECTED"] = "UNRESOLVED"
 
 
 class PublicEvidence(BaseModel):
@@ -48,33 +49,27 @@ class PublicEvidence(BaseModel):
     source_quality: SourceQuality
 
 
+class ModelSignal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    signal: str = Field(min_length=2, max_length=300)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
 class QualificationOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    company_name: str
-    domain: str
-    industry_assessment: str
-    geography_assessment: str
-    size_assessment: str
-    positive_signals: list[str]
-    negative_signals: list[str]
-    industry_fit: int = Field(ge=0, le=100)
-    company_size_fit: int = Field(ge=0, le=100)
-    geography_fit: int = Field(ge=0, le=100)
-    workflow_signals: int = Field(ge=0, le=100)
-    exclusion_risk: int = Field(ge=0, le=100)
-    icp_score: int = Field(ge=0, le=100)
     qualification: Literal["ACCEPT", "REJECT", "INSUFFICIENT_EVIDENCE"]
-    reason: str
-    need_hypothesis: str
-    evidence_ids_used: list[str]
+    model_score: int = Field(ge=0, le=100)
     confidence: int = Field(ge=0, le=100)
+    positive_signals: list[ModelSignal]
+    negative_signals: list[ModelSignal]
+    reason: str
+    need_hypothesis: str | None = None
+    need_hypothesis_evidence_ids: list[str] = []
 
     @model_validator(mode="after")
-    def accepted_has_evidence(self):
-        if not self.evidence_ids_used:
-            raise ValueError("qualification requires at least one supplied evidence ID")
-        if self.qualification == "ACCEPT" and not self.need_hypothesis.strip():
-            raise ValueError("accepted qualification requires evidence and a need hypothesis")
-        if self.qualification != "ACCEPT" and self.need_hypothesis.strip():
-            raise ValueError("non-accepted qualification must not include a need hypothesis")
+    def valid_need_hypothesis(self):
+        if self.qualification == "ACCEPT" and (not self.need_hypothesis or not self.need_hypothesis_evidence_ids):
+            raise ValueError("accepted qualification requires an evidence-backed need hypothesis")
+        if self.qualification != "ACCEPT" and (self.need_hypothesis is not None or self.need_hypothesis_evidence_ids):
+            raise ValueError("non-accepted qualification must use null need_hypothesis and no need evidence")
         return self
