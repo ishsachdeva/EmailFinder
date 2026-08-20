@@ -15,6 +15,8 @@ buyers:
   secondary_titles: [Operations Director, Procurement Manager, Finance Manager]
   excluded_titles: [Intern, Student]
 qualification:
+  strong_triggers: [procurement manager, purchasing manager, finance operations manager, process improvement manager, business systems manager, power platform, workflow transformation, process transformation]
+  supporting_signals: [manufacturing context, construction context, logistics context, multiple locations, Microsoft ecosystem, procurement department, finance operations, operational complexity]
   positive_signals: [procurement operations, finance operations, purchase processes, multiple locations, operations teams, rapid hiring, administrative scaling, Microsoft ecosystem, approval-heavy roles]
   negative_signals: [business closed, consumer-only business, insufficient public evidence]
   minimum_icp_score: 70
@@ -32,3 +34,5 @@ personalization:
 prospecting:
   daily_target: 25
   maximum_candidates_to_process: 30
+  trigger_freshness_days: 90
+  targeted_evidence_search_budget: 2

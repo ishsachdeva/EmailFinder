@@ -23,7 +23,7 @@ class Phase2APipeline:
             session.add(job); session.commit()
             try:
                 discovered = self.discovery.discover(brief)
-                candidates = [candidate for candidate in discovered if candidate.entity_resolution_status == "CONFIRMED"]
+                candidates = [candidate for candidate in discovered if candidate.entity_resolution_status == "CONFIRMED" and candidate.candidate_seed is not None and candidate.candidate_seed.trigger_tier == "A"]
             except Exception:
                 job.status, job.error_count, job.completed_at = "FAILED", 1, now(); session.commit(); raise
             job.discovered_count = len(candidates)
@@ -39,13 +39,19 @@ class Phase2APipeline:
                     company = Company(name=candidate.name, domain=domain, website=str(candidate.website), industry=None, employee_range=None, country=None, status="DISCOVERED")
                     session.add(company); session.flush()
                 try:
+                    if hasattr(self.evidence_provider, "targeted_search_budget"):
+                        self.evidence_provider.targeted_search_budget = brief.prospecting.targeted_evidence_search_budget
                     public_evidence = self.evidence_provider.collect(candidate)
+                    if candidate.candidate_seed is not None:
+                        seed = candidate.candidate_seed
+                        trigger_quality = SourceQuality.PRIMARY if normalize_domain(urlparse(str(seed.trigger_source_url)).netloc) == domain else SourceQuality.REPUTABLE_SECONDARY
+                        public_evidence.insert(0, PublicEvidence(id="trigger-1", evidence_type="public_job_listing" if seed.discovery_lane == "JOB_TRIGGER" else "official_company_signal", source_url=seed.trigger_source_url, source_title=f"{candidate.name}: {seed.trigger_name}", excerpt=seed.trigger_excerpt, source_quality=trigger_quality))
                     # Wikidata discovery fields are structured CC0 claims with a
                     # traceable entity URL. Retain them for gates and reasoning;
                     # do not promote ordinary search snippets to evidence.
                     if urlparse(str(candidate.discovery_url)).netloc.endswith("wikidata.org") and len(candidate.discovery_excerpt) >= 20:
                         public_evidence.insert(0, PublicEvidence(id="wikidata-1", evidence_type="public_business_directory", source_url=candidate.discovery_url, source_title=candidate.discovery_title, excerpt=candidate.discovery_excerpt, source_quality=SourceQuality.REPUTABLE_SECONDARY))
-                    elif candidate.discovery_excerpt.startswith("SEARCH_DISCOVERY:"):
+                    elif candidate.discovery_excerpt.startswith("SEARCH_DISCOVERY:") and candidate.candidate_seed is None:
                         public_evidence.insert(0, PublicEvidence(id="search-1", evidence_type="search_discovery", source_url=candidate.discovery_url, source_title=candidate.discovery_title, excerpt=candidate.discovery_excerpt, source_quality=SourceQuality.SEARCH_DISCOVERY))
                     for item in public_evidence:
                         session.add(Evidence(entity_type="company", entity_id=company.id, evidence_type=item.evidence_type, source_url=str(item.source_url), source_title=item.source_title, excerpt=item.excerpt, source_quality=item.source_quality))

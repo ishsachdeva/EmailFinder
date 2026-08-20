@@ -56,6 +56,8 @@ class ScoringWeights(StrictModel):
 
 class Qualification(StrictModel):
     positive_signals: list[str] = []
+    strong_triggers: list[str] = []
+    supporting_signals: list[str] = []
     negative_signals: list[str] = []
     minimum_icp_score: Score
     minimum_buyer_score: Score
@@ -71,6 +73,8 @@ class Personalization(StrictModel):
 class Prospecting(StrictModel):
     daily_target: int = Field(gt=0)
     maximum_candidates_to_process: int = Field(gt=0)
+    trigger_freshness_days: int | None = Field(default=90, gt=0)
+    targeted_evidence_search_budget: int = Field(default=2, ge=0, le=3)
 
 
 class CompanyBrief(StrictModel):

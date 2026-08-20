@@ -1,13 +1,14 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from emailfinder.domain.phase2 import DiscoveredCompany, PublicEvidence, QualificationOutput, SourceQuality
+from emailfinder.domain.phase2 import CandidateSeed, DiscoveredCompany, DiscoveryLane, PublicEvidence, QualificationOutput, SourceQuality
 from emailfinder.persistence.database import Company, Evidence, Prospect
 from emailfinder.services.phase2_pipeline import Phase2APipeline
 from emailfinder.services.qualification import final_icp_score, hard_rejection
 
 
-C = DiscoveredCompany(name="Acme Engineering", domain="acme.test", website="https://acme.test", discovery_url="https://acme.test", discovery_title="Acme Engineering", discovery_excerpt="Official site", entity_resolution_status="CONFIRMED")
+SEED = CandidateSeed(company_name="Acme Engineering", official_domain="acme.test", discovery_lane=DiscoveryLane.OFFICIAL_COMPANY_SIGNAL, trigger_name="operations manager", trigger_strength=95, trigger_source_url="https://acme.test/careers", trigger_source_type="OFFICIAL_COMPANY", trigger_excerpt="Acme Engineering is hiring an Operations Manager.", entity_confidence=100, query_used="fixture", seed_quality_score=98)
+C = DiscoveredCompany(name="Acme Engineering", domain="acme.test", website="https://acme.test", discovery_url="https://acme.test", discovery_title="Acme Engineering", discovery_excerpt="Official site", entity_resolution_status="CONFIRMED", candidate_seed=SEED)
 E = PublicEvidence(id="web-1", evidence_type="company_website", source_url="https://acme.test", source_title="Acme", excerpt="Acme Engineering is a United States industrial engineering company with 100 employees and procurement operations.", source_quality=SourceQuality.PRIMARY)
 
 
@@ -48,16 +49,16 @@ def test_phase2_orchestration_dedupes_and_caches(engine, brief):
     with Session(engine) as session:
         assert session.scalar(select(func.count(Company.id))) == 1
         assert session.scalar(select(func.count(Prospect.id))) == 1
-        assert session.scalar(select(func.count(Evidence.id))) == 1
+        assert session.scalar(select(func.count(Evidence.id))) == 2
 
 
-def test_wikidata_employee_count_can_reject_before_reasoning(engine, brief):
-    candidate = C.model_copy(update={"discovery_url": "https://www.wikidata.org/entity/Q1", "discovery_excerpt": "engineering; United States; 5 employees"})
+def test_explicit_primary_employee_count_rejects_before_reasoning(engine, brief):
+    candidate = C
     class OneDiscovery:
         def discover(self, brief): return [candidate]
     class NoSizeEvidence:
         def collect(self, company):
-            return [E.model_copy(update={"excerpt": "Acme Engineering is a United States industrial engineering company with procurement operations."})]
+            return [E.model_copy(update={"excerpt": "Acme Engineering is a United States engineering company with 5 employees and procurement operations."})]
     reasoning = Reasoning()
     job = Phase2APipeline(engine, OneDiscovery(), NoSizeEvidence(), reasoning).run(brief)
     assert job.rejected_count == 1, (job.insufficient_count, job.error_count, job.processed_count)

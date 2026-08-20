@@ -17,12 +17,18 @@ def _choose(claims):
 def resolve_facts(evidence, brief) -> ResolvedFacts:
     geography_claims, employee_claims, industry_claims = [], [], []
     for item in evidence:
+        if item.source_quality == SourceQuality.SEARCH_DISCOVERY:
+            continue
         text = " " + item.excerpt.lower() + " "; quality = QUALITY[item.source_quality]
         for value, tokens in GEOGRAPHIES.items():
             if any(token in text for token in tokens): geography_claims.append((quality, value, item.id))
         for raw in re.findall(r"\b([0-9][0-9,]{0,6})\s*(?:\+\s*)?(?:employees|staff members|people)\b", text): employee_claims.append((quality, int(raw.replace(",", "")), item.id))
+        # Industry is factual only when the organization explicitly describes
+        # itself that way. Incidental product/job terminology is not enough.
         for industry in brief.icp.target_industries:
-            if industry.lower() in text: industry_claims.append((quality, industry, item.id))
+            label = re.escape(industry.lower())
+            explicit = rf"(?:we are|is|are|leading|an?)\s+(?:a\s+)?{label}\s+(?:company|business|firm|provider|organization)\b|\b{label}\s+(?:company|business|firm|provider|organization)\b"
+            if re.search(explicit, text): industry_claims.append((quality, industry, item.id))
     inactive = [(QUALITY[e.source_quality], "INACTIVE", e.id) for e in evidence if any(x in e.excerpt.lower() for x in ("permanently closed", "ceased trading", "dissolved company"))]
     return ResolvedFacts(geography=_choose(geography_claims), employee_count=_choose(employee_claims), industry=_choose(industry_claims), operating_status=_choose(inactive) if inactive else ResolvedFact(value="UNKNOWN"))
 

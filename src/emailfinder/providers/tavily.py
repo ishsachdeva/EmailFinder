@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from emailfinder.domain.errors import EmailFinderError, ErrorCategory
-from emailfinder.domain.phase2 import DiscoveredCompany
+from emailfinder.domain.phase2 import CandidateSeed, DiscoveredCompany, DiscoveryLane
 from emailfinder.persistence.database import normalize_domain
 from emailfinder.providers.brave import BLOCKED_HOSTS
 
@@ -74,6 +74,16 @@ class DomainEvaluation:
     url: str
 
 
+@dataclass(frozen=True)
+class JobPostingRecord:
+    title: str
+    employer_name: str
+    employer_url: str | None
+    description: str
+    location: str | None
+    date_posted: str | None
+
+
 def _host(url: str) -> str:
     return normalize_domain(urlparse(url).netloc)
 
@@ -103,12 +113,12 @@ def classify_search_result(item: dict) -> SearchResultType:
         return SearchResultType.OFFICIAL_COMPANY
     text = f"{title} {url} {content[:400]}"
     if any(token in text for token in ("top 10", "top 20", "best companies", "companies in ", "firms in ", "roundup", "list of ")): return SearchResultType.LISTICLE
-    if any(token in url for token in ("/jobs/", "/job/", "/careers/")) or "job opening" in text or "hiring for" in text: return SearchResultType.JOB_POSTING
+    if any(token in url for token in ("/jobs/", "/job/")) or host in {"indeed.com", "glassdoor.com"} or "job opening" in text or "hiring for" in text: return SearchResultType.JOB_POSTING
     if any(token in text for token in ("directory", "company profile", "find businesses")) or host in {"clutch.co", "yelp.com", "yellowpages.com", "zoominfo.com"}: return SearchResultType.DIRECTORY
     if host in {"reuters.com", "bloomberg.com"} or any(token in url for token in ("/news/", "/article/")): return SearchResultType.NEWS
     if _blocked(host): return SearchResultType.VENDOR_CONTENT
     if any(token in url for token in ("/blog/", "/insights/", "/resources/")): return SearchResultType.ARTICLE
-    if any(token in url for token in ("/about", "/company", "/who-we-are", "/services", "/operations")): return SearchResultType.OFFICIAL_COMPANY
+    if any(token in url for token in ("/about", "/company", "/who-we-are", "/services", "/operations", "/careers")): return SearchResultType.OFFICIAL_COMPANY
     return SearchResultType.UNKNOWN
 
 
@@ -158,6 +168,55 @@ def extract_company_entities(item: dict, limit: int = 5) -> list[str]:
     return []
 
 
+def _json_objects(value):
+    if isinstance(value, list):
+        for item in value: yield from _json_objects(item)
+    elif isinstance(value, dict):
+        yield value
+        for item in value.values(): yield from _json_objects(item)
+
+
+def extract_job_posting(html: str) -> JobPostingRecord | None:
+    for raw in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S):
+        try: data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError): continue
+        for item in _json_objects(data):
+            types = item.get("@type", [])
+            if isinstance(types, str): types = [types]
+            if "JobPosting" not in types: continue
+            org = item.get("hiringOrganization") or {}
+            if not isinstance(org, dict) or not org.get("name") or not item.get("title"): return None
+            location = item.get("jobLocation")
+            return JobPostingRecord(str(item["title"]), str(org["name"]), org.get("sameAs") or org.get("url"), str(item.get("description", "")), json.dumps(location)[:300] if location else None, item.get("datePosted"))
+    return None
+
+
+def canonical_company_identity(html: str) -> str | None:
+    for raw in re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S):
+        try: data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError): continue
+        for item in _json_objects(data):
+            if item.get("@type") in {"Organization", "Corporation", "LocalBusiness"} and item.get("name") and company_name_sane(str(item["name"])):
+                return str(item["name"]).strip()
+    og = re.search(r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)', html, re.I)
+    if og and company_name_sane(og.group(1)): return og.group(1).strip()
+    match = re.search(r'<(?:h1|title)[^>]*>(.*?)</(?:h1|title)>', html, re.I | re.S)
+    if match:
+        value = re.split(r"\s+[|–—-]\s+", re.sub(r"<[^>]+>", " ", match.group(1)))[0].strip()
+        if company_name_sane(value): return value
+    return None
+
+
+def match_strong_trigger(text: str, strong_triggers: list[str]) -> str | None:
+    lowered = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).lower()
+    matches = [trigger for trigger in strong_triggers if trigger.lower() in lowered]
+    return max(matches, key=len) if matches else None
+
+
+def seed_quality(entity_confidence: int, trigger_strength: int, lane: DiscoveryLane, dated: bool) -> int:
+    return min(100, round(entity_confidence * .45 + trigger_strength * .35 + (15 if lane == DiscoveryLane.OFFICIAL_COMPANY_SIGNAL else 10) + (5 if dated else 0)))
+
+
 def classify_domain_type(host: str, homepage_text: str) -> DomainType:
     text = homepage_text.lower()[:12000]
     if host.endswith(".edu") or "university" in text: return DomainType.PUBLISHER
@@ -171,12 +230,15 @@ def classify_domain_type(host: str, homepage_text: str) -> DomainType:
 
 
 def build_signal_queries(brief, limit: int = 6) -> list[str]:
-    queries = []; signals = brief.qualification.positive_signals or ["operations"]
+    queries = []; signals = brief.qualification.strong_triggers
+    if not signals: return []
     for index, industry in enumerate(brief.icp.target_industries):
         geography = brief.icp.target_geographies[index % len(brief.icp.target_geographies)]
-        queries.append(f'{industry} company "{signals[index % len(signals)]}" {geography}')
+        trigger = signals[index % len(signals)]
+        queries.append(f'"{trigger}" job {industry} {geography}')
+        if len(queries) < limit: queries.append(f'"{trigger}" company {industry} {geography}')
         if len(queries) >= limit: break
-    return queries
+    return queries[:limit]
 
 
 class TavilyCompanyDiscoveryProvider:
@@ -221,27 +283,58 @@ class TavilyCompanyDiscoveryProvider:
         if not confirmed: return None
         parsed = urlparse(confirmed.url); host = _host(confirmed.url)
         return DiscoveredCompany(name=name, domain=host, website=f"{parsed.scheme or 'https'}://{parsed.netloc}", discovery_url=source["url"], discovery_title=source.get("title", name), discovery_excerpt=f"SEARCH_DISCOVERY: {fragment[:1000]}", discovery_source_type=kind.value, resolution_source=confirmed.url, resolution_confidence=confirmed.score, domain_validation_status="VALIDATED", entity_resolution_status="CONFIRMED")
+
+    def _resolve_canonical(self, discovered_name: str, suggested_url: str | None) -> tuple[str, DomainEvaluation] | None:
+        urls = [suggested_url] if suggested_url else [item.get("url", "") for item in self._search(f'"{discovered_name}" official website', 3)]
+        for url in urls[:3]:
+            if not url: continue
+            evaluation = self._evaluate_domain(discovered_name, url)
+            if evaluation.status != ResolutionStatus.CONFIRMED: continue
+            page = self._get_html(f"{urlparse(evaluation.url).scheme or 'https'}://{urlparse(evaluation.url).netloc}")
+            if not page: continue
+            canonical = canonical_company_identity(page[1])
+            if not canonical: continue
+            discovered_tokens = set(distinctive_tokens(discovered_name)); canonical_tokens = set(distinctive_tokens(canonical))
+            if not discovered_tokens.intersection(canonical_tokens): continue
+            return canonical, evaluation
+        return None
+
+    def _seeded_company(self, canonical: str, evaluation: DomainEvaluation, lane: DiscoveryLane, trigger: str, source: dict, excerpt: str, query: str, date: str | None) -> DiscoveredCompany:
+        parsed = urlparse(evaluation.url); domain = _host(evaluation.url); strength = 95 if lane == DiscoveryLane.OFFICIAL_COMPANY_SIGNAL else 90
+        seed = CandidateSeed(company_name=canonical, official_domain=domain, discovery_lane=lane, trigger_name=trigger, trigger_strength=strength, trigger_source_url=source["url"], trigger_source_type=source.get("type", lane.value), trigger_excerpt=re.sub(r"<[^>]+>", " ", excerpt)[:1500], trigger_date=date, entity_confidence=evaluation.score, query_used=query, seed_quality_score=seed_quality(evaluation.score, strength, lane, bool(date)))
+        return DiscoveredCompany(name=canonical, domain=domain, website=f"{parsed.scheme or 'https'}://{parsed.netloc}", discovery_url=source["url"], discovery_title=source.get("title", canonical), discovery_excerpt=f"SEARCH_DISCOVERY: {seed.trigger_excerpt}", discovery_source_type=source.get("type", lane.value), resolution_source=evaluation.url, resolution_confidence=evaluation.score, domain_validation_status="VALIDATED", entity_resolution_status="CONFIRMED", candidate_seed=seed)
+
     def discover(self, brief):
         if not self.api_key: raise EmailFinderError(ErrorCategory.CONFIG_ERROR, "TAVILY_API_KEY is required for Tavily discovery")
         pool = {}; types = Counter(); extracted = attempts = unresolved = duplicates = rejected = 0
-        for query in build_signal_queries(brief):
+        queries = build_signal_queries(brief)
+        for query in queries:
             if self.raw_result_count >= self.raw_limit: break
             results = self._search(query, min(5, self.raw_limit - self.raw_result_count)); self.raw_result_count += len(results)
             for item in results:
-                kind = classify_search_result(item); types[kind.value] += 1; leads = []
-                if kind == SearchResultType.OFFICIAL_COMPANY:
-                    name = re.split(r"\s+[|–—-]\s+", item.get("title", ""))[0].strip()
-                    if company_name_sane(name): leads = [LinkedEntity(name, item.get("url", ""), item.get("content", ""))]
+                kind = classify_search_result(item); types[kind.value] += 1
+                if kind not in {SearchResultType.JOB_POSTING, SearchResultType.OFFICIAL_COMPANY}: continue
+                page = self._get_html(item.get("url", ""))
+                if not page: continue
+                source = {**item, "url": page[0], "type": kind.value}; candidate = None
+                job = extract_job_posting(page[1]) if kind == SearchResultType.JOB_POSTING else None
+                if job:
+                    trigger = match_strong_trigger(f"{job.title} {job.description}", brief.qualification.strong_triggers)
+                    if not trigger: continue
+                    extracted += 1; attempts += 1; resolved = self._resolve_canonical(job.employer_name, job.employer_url)
+                    if resolved: candidate = self._seeded_company(resolved[0], resolved[1], DiscoveryLane.JOB_TRIGGER, trigger, source, f"{job.title}. {job.description}", query, job.date_posted)
+                elif kind == SearchResultType.OFFICIAL_COMPANY:
+                    trigger = match_strong_trigger(page[1], brief.qualification.strong_triggers)
+                    canonical = canonical_company_identity(page[1])
+                    if not trigger or not canonical: continue
+                    extracted += 1; attempts += 1; resolved = self._resolve_canonical(canonical, page[0])
+                    if resolved: candidate = self._seeded_company(resolved[0], resolved[1], DiscoveryLane.OFFICIAL_COMPANY_SIGNAL, trigger, source, page[1], query, None)
                 else:
-                    page = self._get_html(item.get("url", ""))
-                    if page: leads = extract_linked_company_entities(page[1], page[0], 5)
-                extracted += len(leads)
-                for lead in leads:
-                    attempts += 1; candidate = self._candidate(lead.name, lead.destination_url, item, kind, lead.source_fragment)
-                    if not candidate: unresolved += 1; rejected += 1; continue
-                    score = float(item.get("score", 0)); previous = pool.get(candidate.domain)
-                    if previous is not None: duplicates += 1
-                    if previous is None or score > previous[0]: pool[candidate.domain] = (score, candidate)
+                    continue
+                if not candidate: unresolved += 1; rejected += 1; continue
+                score = candidate.candidate_seed.seed_quality_score; previous = pool.get(candidate.domain)
+                if previous is not None: duplicates += 1
+                if previous is None or score > previous[0]: pool[candidate.domain] = (score, candidate)
         self.unique_domain_count = len(pool); ranked = sorted(pool.values(), key=lambda pair: pair[0], reverse=True)
         found = [candidate for _, candidate in ranked[:min(self.candidate_limit, brief.prospecting.maximum_candidates_to_process)]]
         self.metrics = {"raw_results": self.raw_result_count, "result_types": dict(types), "company_entities_extracted": extracted, "domain_resolution_attempts": attempts, "resolved_official_domains": len(pool), "domain_resolutions_rejected": rejected, "unresolved_entities": unresolved, "validated_candidate_companies": len(pool), "duplicates_removed": duplicates, "final_candidates": len(found)}

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 
@@ -26,6 +27,28 @@ class ResolvedFacts(BaseModel):
     operating_status: ResolvedFact = Field(default_factory=lambda: ResolvedFact(value="UNKNOWN"))
 
 
+class DiscoveryLane(StrEnum):
+    JOB_TRIGGER = "JOB_TRIGGER"
+    OFFICIAL_COMPANY_SIGNAL = "OFFICIAL_COMPANY_SIGNAL"
+
+
+class CandidateSeed(BaseModel):
+    company_name: str
+    official_domain: str
+    discovery_lane: DiscoveryLane
+    trigger_name: str
+    trigger_tier: Literal["A"] = "A"
+    trigger_strength: int = Field(ge=1, le=100)
+    trigger_source_url: HttpUrl
+    trigger_source_type: str
+    trigger_excerpt: str = Field(min_length=5, max_length=1500)
+    trigger_date: str | None = None
+    entity_confidence: int = Field(ge=0, le=100)
+    query_used: str
+    seed_quality_score: int = Field(ge=0, le=100)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class DiscoveredCompany(BaseModel):
     name: str = Field(min_length=2)
     domain: str = Field(pattern=r"^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$")
@@ -38,6 +61,7 @@ class DiscoveredCompany(BaseModel):
     resolution_confidence: int = Field(default=0, ge=0, le=100)
     domain_validation_status: str = "UNVALIDATED"
     entity_resolution_status: Literal["CONFIRMED", "PROBABLE", "UNRESOLVED", "REJECTED"] = "UNRESOLVED"
+    candidate_seed: CandidateSeed | None = None
 
 
 class PublicEvidence(BaseModel):

@@ -14,13 +14,13 @@ def test_signal_queries_derive_from_brief(brief):
     queries = build_signal_queries(brief, 2)
     assert brief.icp.target_industries[0] in queries[0]
     assert brief.icp.target_geographies[0] in queries[0]
-    assert brief.qualification.positive_signals[0] in queries[0]
+    assert brief.qualification.strong_triggers[0] in queries[0]
 
 
 def test_tavily_parses_filters_and_dedupes(brief):
     payload = {"results": [{"title": "Acme Engineering | Procurement", "url": "https://www.acme.test/operations", "content": "Acme describes procurement operations and manufacturing facilities.", "score": .9}, {"title": "Duplicate", "url": "https://acme.test/about", "content": "More useful company evidence about Acme operations.", "score": .5}, {"title": "LinkedIn", "url": "https://linkedin.com/company/acme", "content": "Blocked social result with enough content.", "score": 1}]}
     def handler(request):
-        if request.method == "GET": return httpx.Response(200, text="<html>Acme Engineering industrial operations</html>", headers={"content-type": "text/html"})
+        if request.method == "GET": return httpx.Response(200, text="<html><title>Acme Engineering</title><h1>Acme Engineering</h1>We are hiring an Operations Manager.</html>", headers={"content-type": "text/html"})
         return httpx.Response(200, json=payload)
     client = httpx.Client(transport=httpx.MockTransport(handler))
     provider = TavilyCompanyDiscoveryProvider(api_key="test", client=client, raw_limit=3, candidate_limit=5)
@@ -46,7 +46,7 @@ def test_directory_is_not_target_and_listicle_entities_are_bounded():
     assert [(lead.name, lead.destination_url) for lead in leads] == [("Acme Engineering", "https://acme.test")]
 
 
-def test_official_domain_resolution_validation_and_source_separation(brief):
+def test_listicle_links_do_not_create_automatic_seeds(brief):
     discovery = {"title": "Top Engineering Companies", "url": "https://publisher.test/list", "content": "A bounded list.", "score": .9}
     def handler(request):
         if request.method == "POST": return httpx.Response(200, json={"results": [discovery]})
@@ -54,13 +54,10 @@ def test_official_domain_resolution_validation_and_source_separation(brief):
         return httpx.Response(200, text="<html><title>Acme Engineering</title><h1>Acme Engineering</h1></html>", headers={"content-type": "text/html"})
     provider = TavilyCompanyDiscoveryProvider(api_key="test", client=httpx.Client(transport=httpx.MockTransport(handler)), raw_limit=1)
     found = provider.discover(brief)
-    assert len(found) == 1
-    assert found[0].domain == "acme.test" and str(found[0].discovery_url).startswith("https://publisher.test/")
-    assert found[0].entity_resolution_status == "CONFIRMED"
-    assert "Industrial operations" in found[0].discovery_excerpt
+    assert found == []
 
 
-def test_unresolved_entity_never_becomes_candidate_and_duplicate_domain_dedupes(brief):
+def test_generic_article_external_links_do_not_create_candidates(brief):
     source = {"title": "Industrial roundup", "url": "https://publisher.test/list", "content": "Linked organizations", "score": .8}
     def handler(request):
         if request.method == "POST": return httpx.Response(200, json={"results": [source]})
@@ -69,8 +66,7 @@ def test_unresolved_entity_never_becomes_candidate_and_duplicate_domain_dedupes(
         return httpx.Response(200, text=f"<title>{text}</title><h1>{text}</h1>", headers={"content-type": "text/html"})
     provider = TavilyCompanyDiscoveryProvider(api_key="test", client=httpx.Client(transport=httpx.MockTransport(handler)), raw_limit=1)
     found = provider.discover(brief)
-    assert [c.domain for c in found] == ["acme.test"]
-    assert provider.metrics["unresolved_entities"] == 1 and provider.metrics["duplicates_removed"] == 1
+    assert found == []
 
 
 def test_company_domain_validation_rejects_captured_false_matches(brief):
@@ -118,3 +114,21 @@ def test_missing_size_and_geography_are_not_rejections(brief):
     facts = resolve_facts([ev("web", "Acme Engineering provides procurement operations services.", SourceQuality.PRIMARY)], brief)
     assert facts.employee_count.value is None and facts.geography.value is None
     assert resolved_hard_rejection(facts, brief) is None
+
+
+def test_search_discovery_is_not_used_as_deterministic_fact(brief):
+    search = ev("search", "United States engineering company with 250 employees", SourceQuality.SEARCH_DISCOVERY, "https://search.test")
+    facts = resolve_facts([search], brief)
+    assert facts.geography.value is None and facts.employee_count.value is None and facts.industry.value is None
+
+
+def test_explicit_employee_count_resolves_but_generic_engineering_does_not_set_industry(brief):
+    evidence = ev("primary", "Acme builds engineering tools and employs 250 employees in the United States.", SourceQuality.PRIMARY)
+    facts = resolve_facts([evidence], brief)
+    assert facts.employee_count.value == 250 and facts.geography.value == "United States"
+    assert facts.industry.value is None
+
+
+def test_explicit_organizational_industry_description_resolves(brief):
+    evidence = ev("primary", "Acme is a Professional Services company with 100 employees in the United States.", SourceQuality.PRIMARY)
+    assert resolve_facts([evidence], brief).industry.value == "Professional Services"
