@@ -1,0 +1,29 @@
+company:
+  name: Example Consulting
+  website: https://example.com
+  description: Helps growing businesses improve operations.
+  offer: Operations consulting for small and mid-sized businesses.
+icp:
+  target_industries: [Software, Professional Services]
+  excluded_industries: [Gambling]
+  employee_min: 20
+  employee_max: 500
+  target_geographies: [United States, India]
+  excluded_geographies: []
+buyers:
+  primary_titles: [Chief Operating Officer, VP Operations]
+  secondary_titles: [Operations Director]
+  excluded_titles: [Intern, Student]
+qualification:
+  positive_signals: [rapid growth, operational hiring]
+  negative_signals: [business closed]
+  minimum_icp_score: 70
+  minimum_buyer_score: 65
+  minimum_confidence_score: 70
+personalization:
+  allowed_evidence_types: [company_website, press_release, fixture]
+  prohibited_claims: [guaranteed results, private knowledge]
+prospecting:
+  daily_target: 5
+  maximum_candidates_to_process: 10
+
