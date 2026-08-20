@@ -56,6 +56,19 @@ def test_nvidia_parses_valid_structured_response(brief):
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(output())}}]})))
     provider = NVIDIAReasoningProvider(api_key="test", model="test-model", client=client, limiter=SlidingWindowRateLimiter(36), sleeper=lambda _: None)
     assert provider.qualify_company(company(), evidence(), brief).qualification == "ACCEPT"
+    assert provider.call_metrics[0]["validation_success"] is True
+
+
+def test_nvidia_simplified_contract_is_bounded(brief):
+    captured = {}
+    def handler(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(output())}}]})
+    provider = NVIDIAReasoningProvider(api_key="test", model="test-model", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    provider.qualify_company(company(), evidence(), brief)
+    prompt = json.loads(captured["messages"][1]["content"])
+    assert isinstance(prompt["output_contract"], str) and len(prompt["evidence"]) <= 5
+    assert captured["response_format"]["type"] == "json_schema"
 
 
 def test_nvidia_default_timeout_allows_slow_reasoning_model():

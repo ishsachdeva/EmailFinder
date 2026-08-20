@@ -49,15 +49,19 @@ class Phase2APipeline:
                     for item in public_evidence:
                         session.add(Evidence(entity_type="company", entity_id=company.id, evidence_type=item.evidence_type, source_url=str(item.source_url), source_title=item.source_title, excerpt=item.excerpt, source_quality=item.source_quality))
                     job.evidence_count += len(public_evidence)
-                    facts = resolve_facts(public_evidence, brief)
-                    rejection = resolved_hard_rejection(facts, brief) or hard_rejection(candidate, public_evidence, brief)
-                    if not identity_confirmed(candidate, public_evidence):
+                    # Discovery-only snippets may explain why an entity entered the
+                    # pipeline, but must never contribute company facts or reach the
+                    # qualifier as target-company evidence.
+                    company_evidence = [item for item in public_evidence if item.source_quality != SourceQuality.SEARCH_DISCOVERY]
+                    facts = resolve_facts(company_evidence, brief)
+                    rejection = resolved_hard_rejection(facts, brief) or hard_rejection(candidate, company_evidence, brief)
+                    if not identity_confirmed(candidate, company_evidence):
                         rejection = "INSUFFICIENT_EVIDENCE: company identity not established on its public website"
                     if rejection:
                         qualification = "INSUFFICIENT_EVIDENCE" if rejection.startswith("INSUFFICIENT") else "REJECT"
                         output = None; score = confidence = model_score = 0; det_score = deterministic_score(facts, brief); reason = rejection; need = ""
                     else:
-                        output = self.reasoning.qualify_company(candidate, public_evidence, brief, facts)
+                        output = self.reasoning.qualify_company(candidate, company_evidence, brief, facts)
                         score = inspectable_score(output, brief)
                         det_score, model_score = deterministic_score(facts, brief), output.icp_score
                         qualification = output.qualification

@@ -33,6 +33,10 @@ class DiscoveredCompany(BaseModel):
     discovery_url: HttpUrl
     discovery_title: str
     discovery_excerpt: str
+    discovery_source_type: str = "UNKNOWN"
+    resolution_source: str | None = None
+    resolution_confidence: int = Field(default=0, ge=0, le=100)
+    domain_validation_status: str = "UNVALIDATED"
 
 
 class PublicEvidence(BaseModel):

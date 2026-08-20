@@ -38,26 +38,29 @@ class NVIDIAReasoningProvider:
         self.limiter = limiter or SlidingWindowRateLimiter(36)
         self.max_attempts, self.sleeper = max_attempts, sleeper
         self.reasoning_effort = reasoning_effort or os.getenv("NVIDIA_REASONING_EFFORT", "")
+        self.call_metrics = []
 
     def qualify_company(self, company, evidence, brief, resolved_facts=None) -> QualificationOutput:
         if not self.api_key or not self.model:
             raise EmailFinderError(ErrorCategory.CONFIG_ERROR, "NVIDIA_API_KEY and NVIDIA_MODEL are required for REAL mode")
-        evidence_payload = [{"id": e.id, "source_url": str(e.source_url), "source_quality": e.source_quality, "evidence_type": e.evidence_type, "excerpt": e.excerpt} for e in evidence]
+        evidence_payload = [{"id": e.id, "source_url": str(e.source_url), "source_quality": e.source_quality, "evidence_type": e.evidence_type, "excerpt": e.excerpt[:1500]} for e in evidence[:5]]
         prompt = {
             "instruction": "Evaluate only the supplied evidence against the Company Brief. Never use prior knowledge or invent facts. Return one JSON object matching the requested contract. Component scores are 0-100. Mark INSUFFICIENT_EVIDENCE when identity, industry, geography, size, or fit cannot be responsibly assessed. A need hypothesis must be cautious and cite only evidence IDs.",
             "company": company.model_dump(mode="json"),
             "resolved_facts": resolved_facts.model_dump(mode="json") if resolved_facts else {},
-            "brief": brief.model_dump(mode="json"),
+            "brief": {"target_industries": brief.icp.target_industries, "target_geographies": brief.icp.target_geographies, "employee_min": brief.icp.employee_min, "employee_max": brief.icp.employee_max, "positive_signals": brief.qualification.positive_signals, "excluded_industries": brief.icp.excluded_industries},
             "evidence": evidence_payload,
-            "output_contract": QualificationOutput.model_json_schema(),
+            "output_contract": "JSON fields: company_name, domain, industry_assessment, geography_assessment, size_assessment, positive_signals[], negative_signals[], industry_fit(0-100), company_size_fit(0-100), geography_fit(0-100), workflow_signals(0-100), exclusion_risk(0-100), icp_score(0-100), qualification(ACCEPT|REJECT|INSUFFICIENT_EVIDENCE), reason, need_hypothesis, evidence_ids_used[], confidence(0-100). Non-ACCEPT need_hypothesis must be empty.",
             "boundary": "Resolved facts and hard exclusions are authoritative. Evaluate soft ICP relevance, workflow signals, and cautious need plausibility; do not override resolved facts.",
         }
-        last_error = None
+        last_error = None; call_started = time.monotonic()
         for attempt in range(self.max_attempts):
             self.limiter.acquire()
+            started = time.monotonic()
             try:
                 payload = {"model": self.model, "temperature": 0.1, "stream": False, "messages": [{"role": "system", "content": "You are an evidence-constrained B2B company classifier. Output valid JSON only."}, {"role": "user", "content": json.dumps(prompt)}]}
                 if self.reasoning_effort and "gpt-oss" in self.model: payload["reasoning_effort"] = self.reasoning_effort
+                payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "company_qualification", "strict": True, "schema": QualificationOutput.model_json_schema()}}
                 response = self.client.post(f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, json=payload)
                 if response.status_code == 429:
                     raise EmailFinderError(ErrorCategory.RATE_LIMITED, "NVIDIA rate limit reached")
@@ -70,6 +73,7 @@ class NVIDIAReasoningProvider:
                     raise ValueError("NVIDIA referenced evidence IDs that were not supplied")
                 if output.domain.lower() != company.domain.lower():
                     raise ValueError("NVIDIA output domain does not match candidate")
+                self.call_metrics.append({"company": company.name, "elapsed_seconds": round(time.monotonic() - call_started, 3), "success": True, "retry_count": attempt, "validation_success": True})
                 return output
             except EmailFinderError as exc:
                 last_error = exc
@@ -81,6 +85,7 @@ class NVIDIAReasoningProvider:
             except (KeyError, json.JSONDecodeError, ValidationError, ValueError) as exc:
                 last_error = exc
                 if attempt + 1 >= self.max_attempts:
+                    self.call_metrics.append({"company": company.name, "elapsed_seconds": round(time.monotonic() - call_started, 3), "success": False, "retry_count": attempt, "validation_success": False})
                     raise EmailFinderError(ErrorCategory.INVALID_RESULT, f"NVIDIA returned invalid structured output: {exc}") from exc
             self.sleeper(2 ** attempt)
         raise EmailFinderError(ErrorCategory.PROVIDER_ERROR, f"NVIDIA qualification failed: {last_error}")
