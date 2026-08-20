@@ -1,0 +1,34 @@
+company:
+  name: AppifyU
+  website: https://appifyu.com
+  description: Microsoft 365 and business-process automation consultancy.
+  offer: Power Automate approval workflow implementation, typically valued at $1,500 or more.
+icp:
+  target_industries: [Manufacturing, Industrial Services, Construction, Engineering, Professional Services, Logistics, Distribution, Multi-location Services]
+  excluded_industries: [Consumer-only Retail, Gambling]
+  employee_min: 50
+  employee_max: 1000
+  target_geographies: [United States, United Kingdom]
+  excluded_geographies: []
+buyers:
+  primary_titles: [Chief Operating Officer, VP Operations, Finance Director, Procurement Director]
+  secondary_titles: [Operations Director, Procurement Manager, Finance Manager]
+  excluded_titles: [Intern, Student]
+qualification:
+  positive_signals: [procurement operations, finance operations, purchase processes, multiple locations, operations teams, rapid hiring, administrative scaling, Microsoft ecosystem, approval-heavy roles]
+  negative_signals: [business closed, consumer-only business, insufficient public evidence]
+  minimum_icp_score: 70
+  minimum_buyer_score: 65
+  minimum_confidence_score: 70
+  scoring_weights:
+    industry_fit: 20
+    company_size_fit: 20
+    geography_fit: 15
+    workflow_signals: 30
+    exclusion_risk: 15
+personalization:
+  allowed_evidence_types: [company_website, about_page, services_page, careers_page, public_job_listing, official_newsroom, public_business_directory]
+  prohibited_claims: [broken workflow, guaranteed savings, private knowledge]
+prospecting:
+  daily_target: 25
+  maximum_candidates_to_process: 30

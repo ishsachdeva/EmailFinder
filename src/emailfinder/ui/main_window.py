@@ -13,12 +13,13 @@ from emailfinder.services.pipeline import MockPipeline
 
 
 class MainWindow(QMainWindow):
-    headers = ["Company", "Domain", "Contact", "Title", "Email", "Verification", "ICP Score", "Buyer Score", "Confidence", "Status"]
+    headers = ["Company", "Domain", "Industry", "Location", "ICP Score", "Qualification", "Confidence", "Need Hypothesis", "Evidence Count", "Mode"]
 
     def __init__(self, root: Path):
         super().__init__()
         self.root = root
-        self.brief_path = root / "examples" / "company_brief.example.yaml"
+        self.mode = os.getenv("RUN_MODE", "MOCK").upper()
+        self.brief_path = Path(os.getenv("COMPANY_BRIEF_PATH") or root / "examples" / ("company_brief.appifyu.yaml" if self.mode == "REAL" else "company_brief.example.yaml"))
         db_path = os.getenv("DATABASE_PATH") or str(root / "emailfinder.db")
         self.engine = create_database(db_path)
         self.setWindowTitle("EmailFinder — Phase 1 Mock")
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
         outer = QWidget(); layout = QHBoxLayout(outer)
         nav = QListWidget(); nav.addItems(["Dashboard", "Company Brief", "Prospects", "Jobs", "Settings"]); nav.setFixedWidth(160); nav.setCurrentRow(0)
         content = QWidget(); main = QVBoxLayout(content)
-        self.status = QLabel("Company Brief: ready • deterministic mock mode")
+        self.status = QLabel(f"Company Brief: {self.brief_path.name} • {self.mode} mode")
         self.summary = QLabel("Today's target: —   Last job: —   Accepted: —   Rejected: —")
         button = QPushButton("Build Today's List"); button.clicked.connect(self.run_mock)
         self.table = QTableWidget(0, len(self.headers)); self.table.setHorizontalHeaderLabels(self.headers); self.table.setSelectionBehavior(QTableWidget.SelectRows); self.table.itemSelectionChanged.connect(self.show_details)
@@ -42,9 +43,18 @@ class MainWindow(QMainWindow):
     def run_mock(self):
         try:
             brief = load_company_brief(self.brief_path)
-            pipeline = MockPipeline(self.engine, MockCompanyDiscoveryProvider(), MockReasoningProvider(), MockEmailDiscoveryProvider(), MockEmailVerificationProvider())
-            pipeline.run(brief); self.refresh()
-            QMessageBox.information(self, "Complete", "Mock-only list build completed. No external services were called.")
+            if self.mode == "REAL":
+                from emailfinder.providers.brave import BraveCompanyDiscoveryProvider
+                from emailfinder.providers.evidence import PublicWebsiteEvidenceProvider
+                from emailfinder.providers.nvidia import NVIDIAReasoningProvider
+                from emailfinder.services.phase2_pipeline import Phase2APipeline
+                job = Phase2APipeline(self.engine, BraveCompanyDiscoveryProvider(), PublicWebsiteEvidenceProvider(), NVIDIAReasoningProvider()).run(brief)
+                message = f"REAL Phase 2A complete. Discovered {job.discovered_count}; evidence {job.evidence_count}; evaluated {job.evaluated_count}; accepted {job.accepted_count}; rejected {job.rejected_count}; insufficient {job.insufficient_count}; errors {job.error_count}."
+            else:
+                pipeline = MockPipeline(self.engine, MockCompanyDiscoveryProvider(), MockReasoningProvider(), MockEmailDiscoveryProvider(), MockEmailVerificationProvider())
+                pipeline.run(brief); message = "MOCK list build completed. No external services were called."
+            self.refresh()
+            QMessageBox.information(self, "Complete", message)
         except Exception as exc:
             QMessageBox.critical(self, "Build failed", str(exc))
 
@@ -53,10 +63,12 @@ class MainWindow(QMainWindow):
             rows = list(session.scalars(select(Prospect).order_by(Prospect.id)))
             self.table.setRowCount(len(rows))
             for row, p in enumerate(rows):
-                values = [p.company.name, p.company.domain, p.person.full_name, p.person.title, p.email.email if p.email else "", p.email.verification_status if p.email else "", p.icp_score, p.buyer_score, p.confidence_score, p.status]
+                count = session.query(Evidence).filter(Evidence.entity_type.in_(["company", "prospect"]), Evidence.entity_id.in_([p.company_id, p.id])).count()
+                mode = "REAL" if p.person_id is None else "MOCK"
+                values = [p.company.name, p.company.domain, p.company.industry or "", p.company.country or "", p.icp_score, p.status, p.confidence_score, p.need_hypothesis or "", count, mode]
                 for col, value in enumerate(values):
                     item = QTableWidgetItem(str(value)); item.setData(Qt.UserRole, p.id); self.table.setItem(row, col, item)
-            accepted = sum(p.status == "READY_FOR_REVIEW" for p in rows)
+            accepted = sum(p.status in {"READY_FOR_REVIEW", "ACCEPT"} for p in rows)
             self.summary.setText(f"Today's target: 5   Last job: {'completed' if rows else 'none'}   Accepted: {accepted}   Rejected: {len(rows)-accepted}")
             self.table.resizeColumnsToContents()
 
@@ -66,6 +78,7 @@ class MainWindow(QMainWindow):
         prospect_id = items[0].data(Qt.UserRole)
         with Session(self.engine) as session:
             p = session.get(Prospect, prospect_id)
-            evidence = session.scalar(select(Evidence).where(Evidence.entity_type == "prospect", Evidence.entity_id == prospect_id))
-            self.details.setPlainText(f"Qualification evidence: {evidence.excerpt if evidence else 'None'}\nSource URL: {evidence.source_url if evidence else 'None'}\nNeed hypothesis: {p.need_hypothesis}\nPersonalization angle: {p.personalization_angle}\nRejection reason: {p.rejection_reason or 'None'}")
-
+            evidence = list(session.scalars(select(Evidence).where(((Evidence.entity_type == "prospect") & (Evidence.entity_id == prospect_id)) | ((Evidence.entity_type == "company") & (Evidence.entity_id == p.company_id)))))
+            details = [f"Qualification: {p.status}", f"Need hypothesis: {p.need_hypothesis or 'None'}", f"Rejection reason: {p.rejection_reason or 'None'}"]
+            for item in evidence: details.append(f"\n[{item.source_quality}] {item.source_title}\n{item.source_url}\n{item.excerpt}")
+            self.details.setPlainText("\n".join(details))

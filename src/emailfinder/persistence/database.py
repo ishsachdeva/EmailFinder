@@ -65,6 +65,7 @@ class Evidence(Base):
     source_url: Mapped[str] = mapped_column(String(500))
     source_title: Mapped[str] = mapped_column(String(250))
     excerpt: Mapped[str] = mapped_column(Text)
+    source_quality: Mapped[str] = mapped_column(String(40), default="WEAK_SECONDARY")
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -100,6 +101,10 @@ class Job(Base):
     accepted_count: Mapped[int] = mapped_column(Integer, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
+    discovered_count: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    evaluated_count: Mapped[int] = mapped_column(Integer, default=0)
+    insufficient_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Suppression(Base):
@@ -114,6 +119,14 @@ class Suppression(Base):
 def create_database(path: str | Path = "emailfinder.db"):
     engine = create_engine(f"sqlite:///{Path(path)}")
     Base.metadata.create_all(engine)
+    # Tiny forward-only compatibility step for Phase 1 local databases.
+    from sqlalchemy import inspect, text
+    columns = {c["name"] for c in inspect(engine).get_columns("evidence")}
+    job_columns = {c["name"] for c in inspect(engine).get_columns("jobs")}
+    with engine.begin() as connection:
+        if "source_quality" not in columns: connection.execute(text("ALTER TABLE evidence ADD COLUMN source_quality VARCHAR(40) DEFAULT 'WEAK_SECONDARY'"))
+        for name in ("discovered_count", "evidence_count", "evaluated_count", "insufficient_count"):
+            if name not in job_columns: connection.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} INTEGER DEFAULT 0"))
     return engine
 
 
@@ -133,4 +146,3 @@ def person_key(full_name: str, domain: str) -> tuple[str, str]:
 
 def is_suppressed(session: Session, email: str, domain: str) -> bool:
     return session.scalar(select(Suppression.id).where(or_(Suppression.email == normalize_email(email), Suppression.domain == normalize_domain(domain)))) is not None
-

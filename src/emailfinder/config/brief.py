@@ -40,12 +40,27 @@ class Buyers(StrictModel):
     excluded_titles: list[str] = []
 
 
+class ScoringWeights(StrictModel):
+    industry_fit: int = Field(default=20, ge=0)
+    company_size_fit: int = Field(default=20, ge=0)
+    geography_fit: int = Field(default=15, ge=0)
+    workflow_signals: int = Field(default=30, ge=0)
+    exclusion_risk: int = Field(default=15, ge=0)
+
+    @model_validator(mode="after")
+    def totals_100(self):
+        if sum(self.model_dump().values()) != 100:
+            raise ValueError("qualification.scoring_weights must total 100")
+        return self
+
+
 class Qualification(StrictModel):
     positive_signals: list[str] = []
     negative_signals: list[str] = []
     minimum_icp_score: Score
     minimum_buyer_score: Score
     minimum_confidence_score: Score = 70
+    scoring_weights: ScoringWeights = Field(default_factory=ScoringWeights)
 
 
 class Personalization(StrictModel):
@@ -79,4 +94,3 @@ def load_company_brief(path: str | Path) -> CompanyBrief:
         return CompanyBrief.model_validate(data)
     except (OSError, yaml.YAMLError, ValidationError, CompanyBriefError) as exc:
         raise CompanyBriefError(f"Invalid Company Brief: {exc}") from exc
-
