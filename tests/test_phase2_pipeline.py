@@ -17,7 +17,7 @@ class EvidenceProvider:
     def collect(self, company): return [E]
 class Reasoning:
     calls = 0
-    def qualify_company(self, company, evidence, brief):
+    def qualify_company(self, company, evidence, brief, resolved_facts=None):
         self.calls += 1
         return QualificationOutput(company_name="Acme Engineering", domain="acme.test", industry_assessment="Engineering", geography_assessment="United States", size_assessment="100", positive_signals=["procurement operations"], negative_signals=[], industry_fit=100, company_size_fit=100, geography_fit=100, workflow_signals=80, exclusion_risk=0, icp_score=90, qualification="ACCEPT", reason="Primary evidence supports the fit", need_hypothesis="Documented procurement operations suggest approval coordination may be relevant.", evidence_ids_used=["web-1"], confidence=90)
 

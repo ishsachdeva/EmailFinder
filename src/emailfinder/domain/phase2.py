@@ -8,6 +8,22 @@ class SourceQuality(StrEnum):
     PRIMARY = "PRIMARY"
     REPUTABLE_SECONDARY = "REPUTABLE_SECONDARY"
     WEAK_SECONDARY = "WEAK_SECONDARY"
+    SEARCH_DISCOVERY = "SEARCH_DISCOVERY"
+
+
+class ResolvedFact(BaseModel):
+    value: str | int | None = None
+    evidence_ids: list[str] = []
+    confidence: int = Field(default=0, ge=0, le=100)
+    conflict: bool = False
+    alternatives: list[str] = []
+
+
+class ResolvedFacts(BaseModel):
+    geography: ResolvedFact = Field(default_factory=ResolvedFact)
+    employee_count: ResolvedFact = Field(default_factory=ResolvedFact)
+    industry: ResolvedFact = Field(default_factory=ResolvedFact)
+    operating_status: ResolvedFact = Field(default_factory=lambda: ResolvedFact(value="UNKNOWN"))
 
 
 class DiscoveredCompany(BaseModel):
@@ -51,6 +67,10 @@ class QualificationOutput(BaseModel):
 
     @model_validator(mode="after")
     def accepted_has_evidence(self):
-        if self.qualification == "ACCEPT" and (not self.evidence_ids_used or not self.need_hypothesis.strip()):
+        if not self.evidence_ids_used:
+            raise ValueError("qualification requires at least one supplied evidence ID")
+        if self.qualification == "ACCEPT" and not self.need_hypothesis.strip():
             raise ValueError("accepted qualification requires evidence and a need hypothesis")
+        if self.qualification != "ACCEPT" and self.need_hypothesis.strip():
+            raise ValueError("non-accepted qualification must not include a need hypothesis")
         return self

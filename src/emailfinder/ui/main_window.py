@@ -47,9 +47,13 @@ class MainWindow(QMainWindow):
                 from emailfinder.providers.evidence import PublicWebsiteEvidenceProvider
                 from emailfinder.providers.nvidia import NVIDIAReasoningProvider
                 from emailfinder.services.phase2_pipeline import Phase2APipeline
-                if os.getenv("SEARCH_PROVIDER", "BRAVE").upper() == "WIKIDATA":
+                provider_name = os.getenv("SEARCH_PROVIDER", "TAVILY").upper()
+                if provider_name == "WIKIDATA":
                     from emailfinder.providers.wikidata import WikidataCompanyDiscoveryProvider
                     discovery = WikidataCompanyDiscoveryProvider()
+                elif provider_name == "TAVILY":
+                    from emailfinder.providers.tavily import TavilyCompanyDiscoveryProvider
+                    discovery = TavilyCompanyDiscoveryProvider()
                 else:
                     from emailfinder.providers.brave import BraveCompanyDiscoveryProvider
                     discovery = BraveCompanyDiscoveryProvider()

@@ -33,6 +33,8 @@ Create a Brave Search API account and subscription token through the official **
 
 For a strictly $0 smoke test, `SEARCH_PROVIDER=WIKIDATA` selects Wikidata's public CC0 query service instead. It requires no account or key, returns structured entity and official-website URLs, and is deliberately limited by `DISCOVERY_LIMIT`. Its coverage and freshness are weaker than a commercial search index.
 
+`SEARCH_PROVIDER=TAVILY` is the preferred Phase 2A discovery path. It builds signal-led queries from the Company Brief, screens a bounded result pool, and treats snippets only as `SEARCH_DISCOVERY`. Configure `TAVILY_API_KEY`; Tavily's free Researcher allowance stops at its credit limit unless the account is explicitly upgraded.
+
 ## Setup and run
 
 Prerequisite: Python 3.11 or newer.

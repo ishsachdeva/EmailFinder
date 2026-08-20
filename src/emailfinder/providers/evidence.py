@@ -25,9 +25,12 @@ def normalize_evidence_text(text: str, limit: int = 3500) -> str:
 
 
 class _TextParser(HTMLParser):
-    def __init__(self): super().__init__(); self.parts = []; self.title = ""; self.ignored_depth = 0
+    def __init__(self): super().__init__(); self.parts = []; self.links = []; self.title = ""; self.ignored_depth = 0
     def handle_starttag(self, tag, attrs):
         if tag in {"script", "style", "noscript", "svg"}: self.ignored_depth += 1
+        if tag == "a":
+            href = dict(attrs).get("href")
+            if href: self.links.append(href)
     def handle_endtag(self, tag):
         if tag in {"script", "style", "noscript", "svg"} and self.ignored_depth: self.ignored_depth -= 1
     def handle_data(self, data):
@@ -37,12 +40,26 @@ class _TextParser(HTMLParser):
 
 
 class PublicWebsiteEvidenceProvider:
-    def __init__(self, client: httpx.Client | None = None):
+    LINK_TERMS = ("about", "company", "who-we-are", "location", "facilit", "operation", "service", "industr", "career", "jobs", "team", "leadership", "investor", "annual-report", "profile", "procurement", "supply-chain", "finance")
+    def __init__(self, client: httpx.Client | None = None, page_limit: int | None = None):
         self.client = client or httpx.Client(timeout=12, follow_redirects=True, headers={"User-Agent": "EmailFinder/0.2 public-evidence research"})
+        self.page_limit = page_limit or int(__import__("os").getenv("EVIDENCE_PAGE_LIMIT", "5"))
 
     def collect(self, company: DiscoveredCompany) -> list[PublicEvidence]:
-        urls = [str(company.website), urljoin(str(company.website), "/about"), urljoin(str(company.website), "/careers")]
-        evidence = []
+        homepage = str(company.website); evidence = []; urls = [homepage]
+        try:
+            response = self.client.get(homepage); response.raise_for_status()
+            parser = _TextParser(); parser.feed(response.text)
+            host = normalize_domain(urlparse(str(response.url)).netloc)
+            ranked = []
+            for link in parser.links:
+                absolute = urljoin(str(response.url), link); parsed = urlparse(absolute)
+                if normalize_domain(parsed.netloc) != host: continue
+                path = parsed.path.lower(); score = sum(term in path for term in self.LINK_TERMS)
+                if score: ranked.append((score, absolute.split("#", 1)[0]))
+            urls += [url for _, url in sorted(set(ranked), key=lambda item: (-item[0], item[1]))[: self.page_limit]]
+        except httpx.HTTPError:
+            pass
         for index, url in enumerate(dict.fromkeys(urls)):
             try:
                 response = self.client.get(url)
@@ -55,7 +72,8 @@ class PublicWebsiteEvidenceProvider:
             excerpt = normalize_evidence_text(" ".join(parser.parts))
             if len(excerpt) < 80:
                 continue
-            kind = "company_website" if index == 0 else "about_page" if "/about" in url else "careers_page"
+            path = urlparse(url).path.lower()
+            kind = "company_website" if index == 0 else "investor_page" if "investor" in path or "annual-report" in path else "careers_page" if "career" in path or "jobs" in path else "company_detail_page"
             evidence.append(PublicEvidence(id=f"web-{index+1}", evidence_type=kind, source_url=str(response.url), source_title=company.name + " " + kind.replace("_", " "), excerpt=excerpt, source_quality=classify_source(str(response.url), company.domain)))
         return evidence
 

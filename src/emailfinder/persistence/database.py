@@ -76,6 +76,9 @@ class Prospect(Base):
     person_id: Mapped[int | None] = mapped_column(ForeignKey("people.id"), index=True)
     email_id: Mapped[int | None] = mapped_column(ForeignKey("emails.id"), index=True)
     icp_score: Mapped[int] = mapped_column(Integer)
+    deterministic_score: Mapped[int] = mapped_column(Integer, default=0)
+    model_score: Mapped[int] = mapped_column(Integer, default=0)
+    final_icp_score: Mapped[int] = mapped_column(Integer, default=0)
     buyer_score: Mapped[int] = mapped_column(Integer)
     confidence_score: Mapped[float] = mapped_column(Float)
     confidence_band: Mapped[str] = mapped_column(String(40))
@@ -127,6 +130,9 @@ def create_database(path: str | Path = "emailfinder.db"):
         if "source_quality" not in columns: connection.execute(text("ALTER TABLE evidence ADD COLUMN source_quality VARCHAR(40) DEFAULT 'WEAK_SECONDARY'"))
         for name in ("discovered_count", "evidence_count", "evaluated_count", "insufficient_count"):
             if name not in job_columns: connection.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} INTEGER DEFAULT 0"))
+        prospect_columns = {c["name"] for c in inspect(engine).get_columns("prospects")}
+        for name in ("deterministic_score", "model_score", "final_icp_score"):
+            if name not in prospect_columns: connection.execute(text(f"ALTER TABLE prospects ADD COLUMN {name} INTEGER DEFAULT 0"))
     return engine
 
 

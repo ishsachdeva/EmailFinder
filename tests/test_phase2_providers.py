@@ -48,6 +48,8 @@ def test_evidence_extractor_ignores_script_and_style_content():
 def test_nvidia_output_contract_rejects_bad_data():
     with pytest.raises(ValidationError): QualificationOutput.model_validate(output(icp_score=101))
     with pytest.raises(ValidationError): QualificationOutput.model_validate(output(need_hypothesis="", evidence_ids_used=[]))
+    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(qualification="REJECT", need_hypothesis="", evidence_ids_used=[]))
+    with pytest.raises(ValidationError): QualificationOutput.model_validate(output(qualification="INSUFFICIENT_EVIDENCE", need_hypothesis="Likely complex approvals"))
 
 
 def test_nvidia_parses_valid_structured_response(brief):
